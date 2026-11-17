@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 import subprocess
 import tempfile
 import re
+import numpy as np
+import torch
 import yt_dlp
 from urllib.parse import urlparse, parse_qs
 from pathlib import Path
@@ -12,24 +14,18 @@ from yt_dlp.utils import download_range_func
 from PIL import Image
 
 
-def read_input_parameters():
+def read_input_parameters() -> tuple:
 
     while True:
-        VIDEO_URL_1 = input("First Video URL: ")
-        TIMESTAMP_1 = int(input("Starting from (in s): "))
-
-        VIDEO_URL_2 = input("Second Video URL: ")
-        TIMESTAMP_2 = int(input("Starting from (in s): "))
-
+        VIDEO_URL = input("Video URL: ")
+        TIMESTAMP = int(input("Starting from (in s): "))
         DURATION = int(input("Duration (in s): "))
-        results = [(VIDEO_URL_1, TIMESTAMP_1, DURATION), (VIDEO_URL_2, TIMESTAMP_2, DURATION)]
-        if all(check_validity(x[0], x[1], x[2]) for x in results):
+
+        results = (VIDEO_URL, TIMESTAMP, DURATION)
+        if check_validity(results[0], results[1], results[2]):
+            print("Inputs valid")
             return results
             break
-    print("Inputs valid")
-
-    
-    
 
 def check_validity(url: str, time: str, dur: int) -> bool:
     print(f"Checking validity for URL={url} at time {time} and duration {dur}")
@@ -99,12 +95,7 @@ def check_validity(url: str, time: str, dur: int) -> bool:
         print("Download error")
         return False
 
-def sample_youtube_frames(
-    url: str,
-    timestamp: float,
-    duration: float,
-    sample_interval: float = 1.0
-) -> list[Image.Image]:
+def sample_youtube_frames(url: str, timestamp: float, duration: float, sample_interval: float = 1.0) -> list[Image.Image]:
     """
     Sample images from a YouTube video segment.
 
@@ -206,8 +197,39 @@ def visualize_frames(frames: list[Image.Image], n: int = 5, cols: int = 5):
     plt.tight_layout()
     plt.show()
 
+def frame_to_tensor(
+    frame: Image.Image,
+    size: int = 128
+) -> torch.Tensor:
+    """Convert PIL image into a normalized PyTorch batch."""
+
+    frame = frame.convert("RGB").resize((size, size))
+
+    array = np.asarray(frame).copy()
+
+    tensor = torch.from_numpy(array).float() / 255.0
+
+    return tensor.permute(2, 0, 1).unsqueeze(0)
+
+
+def tensor_to_frame(tensor: torch.Tensor) -> Image.Image:
+    """Convert model output back into a PIL image."""
+
+    array = (
+        tensor.detach()
+        .cpu()
+        .squeeze(0)
+        .permute(1, 2, 0)
+        .clamp(0, 1)
+        .numpy()
+    )
+
+    array = (array * 255).astype(np.uint8)
+
+    return Image.fromarray(array)
+
 if __name__ == "__main__":
     print("MAIN")
-    videos = read_input_parameters()
-    frames = sample_youtube_frames(videos[0][0], videos[0][1], videos[0][2])
+    video = read_input_parameters()
+    frames = sample_youtube_frames(video[0], video[1], video[2])
     visualize_frames(frames)
