@@ -8,14 +8,59 @@ from torch.utils.data import DataLoader
 from itertools import chain
 import torch.nn as nn
 import numpy as np
+from pathlib import Path
 
-device = torch.device(
-        "cuda" if torch.cuda.is_available()
-        else "cpu"
+def save_model(model: FaceAutoencoder, filepath: str):
+    """Save a trained autoencoder to a file."""
+
+    Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+
+    latent_channels = model.encoder.network[-2].out_channels
+
+    torch.save({
+        "encoder": model.encoder.state_dict(),
+        "decoder": model.decoder.state_dict(),
+        "latent_channels": latent_channels,
+    }, filepath)
+
+def load_model(
+    filepath: str,
+    device: torch.device | None = None,
+    encoder: FaceEncoder | None = None
+) -> FaceAutoencoder:
+    """Load a trained autoencoder from a file."""
+
+    if device is None:
+        device = torch.device(
+            "cuda" if torch.cuda.is_available()
+            else "mps" if torch.backends.mps.is_available()
+            else "cpu"
+        )
+
+    checkpoint = torch.load(
+        filepath,
+        map_location=device,
+        weights_only=True
     )
 
+    latent_channels = checkpoint["latent_channels"]
 
-def initialize_autoencoders(images: dict):
+    # Initialize encoder (or reuse an existing shared encoder)
+    if encoder is None:
+        encoder = FaceEncoder(latent_channels)
+
+    decoder = FaceDecoder(latent_channels)
+
+    # Restore weights
+    encoder.load_state_dict(checkpoint["encoder"])
+    decoder.load_state_dict(checkpoint["decoder"])
+
+    model = FaceAutoencoder(encoder, decoder).to(device)
+    model.eval()
+
+    return model
+
+def initialize_autoencoders(images: dict, device: torch.device):
     
 
     # Initialize shared encoder
@@ -29,18 +74,20 @@ def initialize_autoencoders(images: dict):
         models[k] = model
     return models
 
-def initialize_optimizer_loss(models: dict):
+def initialize_optimizer_loss(models: dict, lr: float = 1e-4):
     encoder = next(iter(models.values())).encoder
     if any(m.encoder is not encoder for m in models.values()):
         raise ValueError("Models must share the same encoder.")
     optimizer = torch.optim.Adam(chain(
         encoder.parameters(), *(m.decoder.parameters() for m in models.values())
-    ), lr=1e-4)
+    ), lr=lr)
     criterion = nn.L1Loss()
     return optimizer, criterion
         
 
-def train_step(data: torch.Tensor, encoder: FaceEncoder, decoder: FaceDecoder, optimizer: torch.optim.Adam, criterion = nn.L1Loss()):
+def train_step(device: torch.device, data: torch.Tensor, model: FaceAutoencoder, optimizer: torch.optim.Adam, criterion = nn.L1Loss(), ):
+    encoder = model.encoder
+    decoder = model.decoder
     encoder.train()
     decoder.train()
     data = data.to(device)
@@ -97,6 +144,11 @@ def train_autoencoders(
         history: Dictionary of loss histories.
     """
 
+    device = torch.device(
+        "cuda" if torch.cuda.is_available()
+        else "cpu"
+    )
+
     # 1. Validate arguments
     if not images or any(len(v) == 0 for v in images.values()):
         raise ValueError("All image lists must be non-empty.")
@@ -110,7 +162,7 @@ def train_autoencoders(
     print(f"Training on {device}")
 
     # 3. Initialize models
-    models = initialize_autoencoders(images)
+    models = initialize_autoencoders(images, device)
 
     # 4. Initialize optimizer and loss
     optimizer, criterion = initialize_optimizer_loss(models, lr)
@@ -157,6 +209,7 @@ def train_autoencoders(
 
             # Update shared encoder + selected decoder
             loss = train_step(
+                device=device,
                 data=batch,
                 model=models[name],
                 optimizer=optimizer,
