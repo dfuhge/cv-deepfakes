@@ -314,8 +314,8 @@ def inference_youtube_video(
 
 if __name__ == "__main__":
     video_urls = {
-        "person_a": "https://www.youtube.com/watch?v=6v_LVsOl-uo",
-        "person_b": "https://www.youtube.com/watch?v=LQtV-iOwijY"
+        "obama": "https://www.youtube.com/watch?v=CzII3W2MLYY",
+        "trump": "https://www.youtube.com/watch?v=afqYJUxsRaE"
     }
 
     models, history, model_paths = train_from_youtube(
@@ -327,3 +327,13 @@ if __name__ == "__main__":
         epochs=50,
         batch_size=16
     )
+
+
+    output_path = inference_youtube_video(
+    url="https://www.youtube.com/watch?v=MS5UjNKw_1M",
+    model_path="models/trump.pt",
+    output_path="outputs/result.mp4",
+    image_size=128,
+    batch_size=16,
+    preserve_audio=True
+)

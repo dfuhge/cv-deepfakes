@@ -95,81 +95,98 @@ def check_validity(url: str, time: str, dur: int) -> bool:
         print("Download error")
         return False
 
-def sample_youtube_frames(url: str, timestamp: float, duration: float, sample_interval: float = 1.0) -> list[Image.Image]:
+def sample_youtube_frames(
+    url: str,
+    timestamp: float,
+    duration: float,
+    sample_interval: float = 1.0
+) -> list[Image.Image]:
     """
-    Sample images from a YouTube video segment.
+    Sample frames from a YouTube video.
 
-    Args:
-        url: YouTube video URL.
-        timestamp: Start time in seconds.
-        duration: Segment duration in seconds.
-        sample_interval: Seconds between sampled frames.
-
-    Returns:
-        List of PIL Images.
+    Downloads the source video first, then extracts
+    frames locally using FFmpeg.
     """
+
+    # 1. Validate input
+    if not check_validity(url, timestamp, duration):
+        raise ValueError("Invalid YouTube URL or time range.")
+
+    if not math.isfinite(sample_interval) or sample_interval <= 0:
+        raise ValueError("sample_interval must be positive and finite.")
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
 
-        # 2. Download only the requested segment
-        # For zero duration, extract a single image.
-        end_time = timestamp + (duration if duration > 0 else 1.0)
-
+        # 2. Download video WITHOUT FFmpeg section cutting
         options = {
-            "format": "bestvideo[ext=mp4]/bestvideo/best",
-            "outtmpl": str(tmp_path / "clip.%(ext)s"),
-            "download_ranges": download_range_func(
-                None, [(timestamp, end_time)]
-            ),
-            "force_keyframes_at_cuts": True,
+            "format": "bv*[height<=720]/bv*/b",
+            "outtmpl": str(tmp_path / "video.%(ext)s"),
             "noplaylist": True,
-            "quiet": True,
+            "quiet": False,
+            "no_warnings": False,
         }
 
         with yt_dlp.YoutubeDL(options) as ydl:
             ydl.download([url])
 
-        # Locate downloaded video
+        # 3. Find downloaded video
         video_files = [
-            p for p in tmp_path.iterdir()
-            if p.suffix.lower() in {".mp4", ".mkv", ".webm", ".ts"}
+            p for p in tmp_path.glob("video.*")
+            if p.suffix.lower() in {".mp4", ".webm", ".mkv"}
         ]
 
         if not video_files:
-            raise RuntimeError("Video segment could not be downloaded.")
+            raise RuntimeError("Video download failed.")
 
         video_path = video_files[0]
 
-        # 3. Extract frames
-        frame_pattern = str(tmp_path / "frame_%05d.jpg")
+        # 4. Extract frames locally
+        output_pattern = str(tmp_path / "frame_%06d.jpg")
 
         command = [
             "ffmpeg",
             "-hide_banner",
             "-loglevel", "error",
             "-y",
+            "-ss", str(timestamp),
             "-i", str(video_path),
         ]
 
         if duration > 0:
             command += [
-                "-vf", f"fps={1 / sample_interval}:start_time=0",
+                "-t", str(duration),
+                "-vf", f"fps={1 / sample_interval}",
                 "-frames:v", str(math.ceil(duration / sample_interval)),
             ]
         else:
             command += ["-frames:v", "1"]
 
-        command += ["-q:v", "2", frame_pattern]
+        command += [
+            "-q:v", "2",
+            output_pattern
+        ]
 
-        subprocess.run(command, check=True)
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True
+        )
 
-        # 4. Load frames into memory
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"FFmpeg frame extraction failed:\n{result.stderr}"
+            )
+
+        # 5. Load extracted images
         frames = []
 
-        for frame_file in sorted(tmp_path.glob("frame_*.jpg")):
-            with Image.open(frame_file) as img:
-                frames.append(img.convert("RGB"))
+        for path in sorted(tmp_path.glob("frame_*.jpg")):
+            with Image.open(path) as image:
+                frames.append(image.convert("RGB"))
+
+        if not frames:
+            raise RuntimeError("No frames could be extracted.")
 
         return frames
 
